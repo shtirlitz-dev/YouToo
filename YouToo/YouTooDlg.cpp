@@ -7,6 +7,7 @@
 #include "YouToo.h"
 #include "YouTooDlg.h"
 #include "afxdialogex.h"
+#include "CommonFunc.h"
 
 #include <afxinet.h>
 
@@ -40,10 +41,6 @@ https://github.com/yt-dlp/yt-dlp
 */
 
 namespace {
-	UINT fmtMozUrl = 0;
-	UINT fmtUniformResourceLocatorW = 0;
-	UINT fmtUniformResourceLocator = 0;
-
 	CRect GetMonitorRect(HWND hWnd) {
 		HMONITOR hMonitor = MonitorFromWindow(hWnd, MONITOR_DEFAULTTONEAREST);
 		MONITORINFO monitorInfo{ .cbSize = sizeof(MONITORINFO) };
@@ -52,17 +49,6 @@ namespace {
 			return monitorInfo.rcMonitor;
 
 		return {};
-	}
-
-	CStringW fromUtf8(std::string_view utf8)
-	{
-		int utf16Length = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), nullptr, 0);
-		CStringW ret;
-		if (utf16Length <= 0)
-			return ret;
-		// Convert UTF-8 to UTF-16
-		MultiByteToWideChar(CP_UTF8, 0, utf8.data(), (int)utf8.size(), ret.GetBufferSetLength(utf16Length), utf16Length);
-		return ret;
 	}
 
 	std::vector<char> LoadFileFromURL(const CString& strURL, CString* err)
@@ -76,10 +62,8 @@ namespace {
 			if (pFile != nullptr) {
 				char buffer[1024];
 				UINT bytesRead = 0;
-				while ((bytesRead = pFile->Read(buffer, sizeof(buffer))) > 0) {
+				while ((bytesRead = pFile->Read(buffer, sizeof(buffer))) > 0)
 					ret.insert(ret.end(), buffer, buffer + bytesRead);
-				}
-
 			}
 		}
 		catch (CInternetException* pEx) {
@@ -219,6 +203,7 @@ END_MESSAGE_MAP()
 
 CYouTooDlg::CYouTooDlg(CWnd* pParent /*=nullptr*/)
 	: CDialogEx(IDD_YOUTOO_DIALOG, pParent)
+	, m_dropTarget(WM_DROPPED_TEXT)
 {
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
 }
@@ -232,10 +217,6 @@ void CYouTooDlg::DoDataExchange(CDataExchange* pDX)
 
 BOOL CYouTooDlg::OnInitDialog()
 {
-	fmtMozUrl = RegisterClipboardFormat(L"text/x-moz-url");
-	fmtUniformResourceLocatorW = RegisterClipboardFormat(L"UniformResourceLocatorW");
-	fmtUniformResourceLocator = RegisterClipboardFormat(L"UniformResourceLocator");
-
 	CDialogEx::OnInitDialog();
 
 	SetIcon(m_hIcon, TRUE);			// Set big icon
@@ -247,7 +228,7 @@ BOOL CYouTooDlg::OnInitDialog()
 	CRect mon = GetMonitorRect(m_hWnd);
 	CRect dlg;
 	GetWindowRect(&dlg);
-	dlg.InflateRect(dlg.Width() * 3 / 8, dlg.Height() * 1 / 4);
+	dlg.InflateRect(dlg.Width() * 7 / 16, dlg.Height() * 1 / 4);
 	if(dlg.left < 0)
 		dlg.OffsetRect(-dlg.left, 0);
 	else if (dlg.right > mon.right)
@@ -258,6 +239,7 @@ BOOL CYouTooDlg::OnInitDialog()
 		dlg.OffsetRect(0, mon.bottom - dlg.bottom);
 
 	MoveWindow(&dlg);
+	m_URL.SetCueBanner(L"(can be dragged from the browser adddress bar)", TRUE);
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
@@ -364,63 +346,15 @@ void CYouTooDlg::AddLog(const CString& text, bool discardPrevious)
 }
 
 
-/// ////////////////////////////////////////////////////
-
-inline DROPEFFECT MyDropTarget::OnDragEnter(CWnd* pWnd, COleDataObject* pDataObject, DWORD dwKeyState, CPoint point)
-{
-	//pDataObject->BeginEnumFormats();
-	//FORMATETC fe;
-	//std::vector<std::wstring> fmts;
-	//while (pDataObject->GetNextFormat(&fe)) {
-	//	wchar_t buf[200];
-	//	if (GetClipboardFormatName(fe.cfFormat, buf, 200) > 0)
-	//		fmts.push_back(buf);
-	//	int g = 0;
-	//}
-
-	isText = pDataObject->IsDataAvailable(CF_UNICODETEXT)
-		|| pDataObject->IsDataAvailable(fmtMozUrl)
-		|| pDataObject->IsDataAvailable(fmtUniformResourceLocatorW)
-		|| pDataObject->IsDataAvailable(fmtUniformResourceLocator);
-	return isText ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-}
-
-inline DROPEFFECT MyDropTarget::OnDragOver(CWnd* pWnd, COleDataObject* pDataObject, DWORD dwKeyState, CPoint point)
-{
-	return isText ? DROPEFFECT_COPY : DROPEFFECT_NONE;
-}
-
-inline void MyDropTarget::OnDragLeave(CWnd* pWnd)
-{
-	isText = false;
-}
-
-inline BOOL MyDropTarget::OnDrop(CWnd* pWnd, COleDataObject* pDataObject, DROPEFFECT dropEffect, CPoint point)
-{
-	droppedText.Empty();
-	for (auto fmt : { fmtMozUrl, fmtUniformResourceLocatorW, fmtUniformResourceLocator, (UINT)CF_UNICODETEXT }) {
-		HGLOBAL hGlobal = pDataObject->GetGlobalData(CF_UNICODETEXT);
-		if (hGlobal == nullptr)
-			continue;
-		LPCTSTR lpszText = static_cast<LPCTSTR>(GlobalLock(hGlobal));
-		if (lpszText != nullptr) {
-			// Handle the dropped text (URL)
-			// For example: MessageBox(pWnd->GetSafeHwnd(), lpszText, _T("Dropped URL"), MB_OK);
-			if(fmt == fmtUniformResourceLocator)
-				droppedText = fromUtf8((LPCSTR)lpszText) ;
-			else
-				droppedText = lpszText;
-			GlobalUnlock(hGlobal);
-			::PostMessage(m_hWnd, WM_DROPPED_TEXT, 0, 0);
-		}
-		GlobalFree(hGlobal);
-		break;
-	}
-	return TRUE;
-}
-
 
 void CYouTooDlg::OnOK()
 {
 	// just ignore
+}
+
+
+void CYouTooDlg::OnCancel()
+{
+
+	CDialogEx::OnCancel();
 }

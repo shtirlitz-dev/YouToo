@@ -1,21 +1,8 @@
-
-// YouTooDlg.h : header file
-//
-
 #pragma once
 
-class MyDropTarget : public COleDropTarget {
-public:
-	DROPEFFECT OnDragEnter(CWnd* pWnd, COleDataObject* pDataObject, DWORD dwKeyState, CPoint point) override;
-	DROPEFFECT OnDragOver(CWnd* pWnd, COleDataObject* pDataObject, DWORD dwKeyState, CPoint point)override;
-	void OnDragLeave(CWnd* pWnd) override;
-	BOOL OnDrop(CWnd* pWnd, COleDataObject* pDataObject, DROPEFFECT dropEffect, CPoint point) override;
+#include "MyDropTarger.h"
 
-	const auto& GetText() const { return droppedText; }
-private:
-	CString droppedText;
-	bool isText = false;
-};
+#include <thread>
 
 // CYouTooDlg dialog
 class CYouTooDlg : public CDialogEx
@@ -47,9 +34,10 @@ protected:
 	void AddLog(const CString& text, bool discardPrevious = false);
 
 	DECLARE_MESSAGE_MAP()
+	virtual void OnOK();
+	virtual void OnCancel();
 
 	MyDropTarget m_dropTarget;
 	CEdit m_URL;
 	CEdit m_status;
-	virtual void OnOK();
 };
