@@ -12,6 +12,7 @@
 #include <afxinet.h>
 
 #include <memory>
+#include <functional>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -158,7 +159,22 @@ namespace {
 		return res;
 	}
 
-	bool DownloadAudio(const CString& vidId, const CString& file)
+	//void ReadOutput(HANDLE hOutputRead, HWND hEditControl) {
+	void ReadOutput(HANDLE hOutputRead, std::function<void(const char*)> logFun) {
+		char buffer[4096];
+		DWORD dwRead;
+
+		while (ReadFile(hOutputRead, buffer, sizeof(buffer), &dwRead, NULL) && dwRead) {
+			buffer[dwRead] = '\0';
+			logFun(buffer);
+			//// Display the output in the edit control
+			//int textLength = GetWindowTextLength(hEditControl);
+			//SendMessage(hEditControl, EM_SETSEL, textLength, textLength);
+			//SendMessage(hEditControl, EM_REPLACESEL, FALSE, (LPARAM)buffer);
+		}
+	}
+
+	bool DownloadAudio(const CString& vidId, const CString& file, HANDLE hStop)
 	{
 		STARTUPINFO startupInfo{ .cb = sizeof(STARTUPINFO) };
 		PROCESS_INFORMATION processInfo;
@@ -177,8 +193,13 @@ namespace {
 			&processInfo))       // Pointer to PROCESS_INFORMATION structure
 			return false;
 
-		// Wait for the process to complete
-		WaitForSingleObject(processInfo.hProcess, INFINITE);
+		// Wait for the process to complete or stop event
+		HANDLE two[2] = { processInfo.hProcess, hStop };
+		auto wRes = WaitForMultipleObjects(2, two, FALSE, INFINITE);
+		if (wRes != WAIT_OBJECT_0) {
+			// hStop was set
+			TerminateProcess(processInfo.hProcess, 0);
+		}
 
 		// Clean up handles
 		CloseHandle(processInfo.hProcess);
@@ -186,18 +207,19 @@ namespace {
 
 		return TouchFile(file);
 	}
-
 }
 
 // CYouTooDlg dialog
 
 #define WM_DROPPED_TEXT (WM_APP + 5)
+#define WM_THREAD_FINISHED (WM_APP + 6)
 
 BEGIN_MESSAGE_MAP(CYouTooDlg, CDialogEx)
 	ON_WM_SYSCOMMAND()
 	ON_WM_PAINT()
 	ON_WM_QUERYDRAGICON()
 	ON_MESSAGE(WM_DROPPED_TEXT, OnDroppedText)
+	ON_MESSAGE(WM_THREAD_FINISHED, OnEndThread)
 	ON_BN_CLICKED(IDC_BUTTON1, &CYouTooDlg::OnBnClickedGo)
 END_MESSAGE_MAP()
 
@@ -331,8 +353,28 @@ void CYouTooDlg::OnBnClickedGo()
 
 	fileName = fd.GetPathName();
 	AddLog(L"Loading " + fileName + L"...");
-	bool res = DownloadAudio(id, fileName);
-	AddLog(res? L"done" : L"error");
+	EnableControls(false);
+	m_stopEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+	m_thread = std::jthread(&CYouTooDlg::DownloadInThread, this, id, fileName);
+}
+
+void CYouTooDlg::DownloadInThread(CString id, CString fileName) // executed in thread
+{
+	bool res = DownloadAudio(id, fileName, m_stopEvent);
+	PostMessage(WM_THREAD_FINISHED, 0, res);
+}
+
+LRESULT CYouTooDlg::OnEndThread(WPARAM wParam, LPARAM lParam)
+{
+	m_thread->join();
+	m_thread.reset();
+	CloseHandle(m_stopEvent);
+	m_stopEvent = 0;
+	EnableControls(true);
+	AddLog(lParam ? L"Success" : L"Failure");
+	if (m_closeOnFinish)
+		PostMessage(WM_SYSCOMMAND, SC_CLOSE);
+	return 0;
 }
 
 void CYouTooDlg::AddLog(const CString& text, bool discardPrevious)
@@ -345,7 +387,13 @@ void CYouTooDlg::AddLog(const CString& text, bool discardPrevious)
 		m_status.ReplaceSel(L"\r\n" + text);
 }
 
-
+void CYouTooDlg::EnableControls(bool en)
+{
+	m_dropTarget.Enable(en);
+	m_URL.EnableWindow(en);
+	if (auto btn = GetDlgItem(IDC_BUTTON1))
+		btn->EnableWindow(en);
+}
 
 void CYouTooDlg::OnOK()
 {
@@ -355,6 +403,10 @@ void CYouTooDlg::OnOK()
 
 void CYouTooDlg::OnCancel()
 {
-
-	CDialogEx::OnCancel();
+	if(!m_thread)
+		CDialogEx::OnCancel();
+	else {
+		m_closeOnFinish = true;
+		SetEvent(m_stopEvent);
+	}
 }
