@@ -81,6 +81,57 @@ namespace {
 		return ret;
 	}
 
+	int EntityCode(const CString& str)
+	{
+		if (str == L"&nbsp;")
+			return 160;
+		if (str == L"&lt;")
+			return '<';
+		if (str == L"&gt;")
+			return '>';
+		if (str == L"&amp;")
+			return '&';
+		if (str == L"&quot;")
+			return '"';
+		if (str == L"&apos;")
+			return '\'';
+		if (str == L"&copy;")
+			return 169;
+		return 0;
+	}
+
+	CString ReplaceHTMLEntities(CString str)
+	{
+		// convert entities as &#39; into characters
+		for(int startPos = 0; startPos < str.GetLength(); ) {
+			
+			int entityStart = str.Find('&', startPos); // Find the next HTML entity starting from startPos
+			if (entityStart == -1)
+				break;
+			
+			int entityEnd = str.Find(';', entityStart); // Find the end of the HTML entity
+			if (entityEnd == -1)  // bad html
+				break;
+
+			CString entity = str.Mid(entityStart, entityEnd - entityStart + 1);
+			int charCode = str[entityStart + 1] == '#'
+				? _ttoi(str.GetString() + entityStart + 2)
+				: EntityCode(str.Mid(entityStart, entityEnd - entityStart + 1));
+
+			if (!charCode) {
+				startPos = entityEnd + 1;
+				continue;
+			}
+
+			str.Delete(entityStart, entityEnd - entityStart);
+			str.SetAt(entityStart, wchar_t(charCode));
+
+			startPos = entityStart + 1;
+		}
+
+		return str;
+	}
+
 	CString GetTitleFrom(const CString& url, CString* err)
 	{
 		std::vector<char> content = LoadFileFromURL(url, err);
@@ -100,7 +151,8 @@ namespace {
 
 		if (title.IsEmpty())
 			err->SetString(L"Failed to find the title");
-		return title;
+
+		return ReplaceHTMLEntities(title);
 	}
 
 	CString MakeFileName(CString title)
@@ -150,7 +202,7 @@ namespace {
 
 		// Open the file
 		HANDLE hFile = CreateFile(file, FILE_WRITE_ATTRIBUTES, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
-		if (hFile == INVALID_HANDLE_VALUE) 
+		if (hFile == INVALID_HANDLE_VALUE)
 			return false;
 
 		// Set the file times (created, modified, accessed) to the current time
@@ -174,10 +226,35 @@ namespace {
 		}
 	}
 
-	bool DownloadAudio(const CString& vidId, const CString& file, HANDLE hStop)
+	bool DownloadAudio(const CString& vidId, const CString& file, HANDLE hStop, std::function<void(const char*)> logFun)
 	{
-		STARTUPINFO startupInfo{ .cb = sizeof(STARTUPINFO) };
-		PROCESS_INFORMATION processInfo;
+		STARTUPINFO startupInfo{
+			.cb = sizeof(STARTUPINFO),
+			.dwFlags = STARTF_USESHOWWINDOW,
+			.wShowWindow = SW_HIDE,
+		};
+		PROCESS_INFORMATION processInfo{};
+
+		SECURITY_ATTRIBUTES saAttr{
+			.nLength = sizeof(SECURITY_ATTRIBUTES),
+			.lpSecurityDescriptor = NULL,
+			.bInheritHandle = TRUE,
+		};
+
+		HANDLE hChildOutputRead = nullptr, hChildOutputWrite = nullptr;
+		if (CreatePipe(&hChildOutputRead, &hChildOutputWrite, &saAttr, 0)) {
+			SetHandleInformation(hChildOutputRead, HANDLE_FLAG_INHERIT, 0);
+			startupInfo.hStdOutput = hChildOutputWrite;  // Redirect STDOUT to the write end of the pipe
+			startupInfo.hStdError = hChildOutputWrite;   // Redirect STDERR to the write end of the pipe
+			startupInfo.dwFlags |= STARTF_USESTDHANDLES;
+		}
+		auto closePipe = [&] {
+			if (hChildOutputWrite)
+				CloseHandle(hChildOutputWrite);
+			if (hChildOutputRead)
+				CloseHandle(hChildOutputRead);
+			};
+
 		//yt-dlp -x --audio-format mp3 -o fino_al_giorno_nuovo.mp3 -- KkpmgBuc8XQ
 		CString cmdLine = L"yt-dlp -x --audio-format mp3 -o \"" + file + "\" -- " + vidId;
 		if (!CreateProcess(
@@ -185,14 +262,17 @@ namespace {
 			cmdLine.GetBuffer(), // Command line
 			nullptr,             // Process handle not inheritable
 			nullptr,             // Thread handle not inheritable
-			FALSE,               // Set handle inheritance to FALSE
+			TRUE,                // Set handle inheritance to FALSE
 			0,                   // No creation flags
 			nullptr,             // Use parent's environment block
 			nullptr,             // Use parent's starting directory
 			&startupInfo,        // Pointer to STARTUPINFO structure
-			&processInfo))       // Pointer to PROCESS_INFORMATION structure
+			&processInfo)) {      // Pointer to PROCESS_INFORMATION structure
+			closePipe();
 			return false;
+		}
 
+		std::jthread thReadPipe([&] { ReadOutput(hChildOutputRead, logFun); });
 		// Wait for the process to complete or stop event
 		HANDLE two[2] = { processInfo.hProcess, hStop };
 		auto wRes = WaitForMultipleObjects(2, two, FALSE, INFINITE);
@@ -204,6 +284,8 @@ namespace {
 		// Clean up handles
 		CloseHandle(processInfo.hProcess);
 		CloseHandle(processInfo.hThread);
+		closePipe();
+		thReadPipe.join();
 
 		return TouchFile(file);
 	}
@@ -221,6 +303,7 @@ BEGIN_MESSAGE_MAP(CYouTooDlg, CDialogEx)
 	ON_MESSAGE(WM_DROPPED_TEXT, OnDroppedText)
 	ON_MESSAGE(WM_THREAD_FINISHED, OnEndThread)
 	ON_BN_CLICKED(IDC_BUTTON1, &CYouTooDlg::OnBnClickedGo)
+	ON_BN_CLICKED(IDC_BUTTON2, &CYouTooDlg::OnBnClickedButton2)
 END_MESSAGE_MAP()
 
 CYouTooDlg::CYouTooDlg(CWnd* pParent /*=nullptr*/)
@@ -235,6 +318,7 @@ void CYouTooDlg::DoDataExchange(CDataExchange* pDX)
 	CDialogEx::DoDataExchange(pDX);
 	DDX_Control(pDX, IDC_EDIT1, m_URL);
 	DDX_Control(pDX, IDC_EDIT2, m_status);
+	DDX_Control(pDX, IDC_PROGRESS1, m_progress);
 }
 
 BOOL CYouTooDlg::OnInitDialog()
@@ -244,24 +328,25 @@ BOOL CYouTooDlg::OnInitDialog()
 	SetIcon(m_hIcon, TRUE);			// Set big icon
 	SetIcon(m_hIcon, FALSE);		// Set small icon
 
-
 	m_dropTarget.Register(this);
 
 	CRect mon = GetMonitorRect(m_hWnd);
 	CRect dlg;
 	GetWindowRect(&dlg);
 	dlg.InflateRect(dlg.Width() * 7 / 16, dlg.Height() * 1 / 4);
-	if(dlg.left < 0)
+	if (dlg.left < 0)
 		dlg.OffsetRect(-dlg.left, 0);
 	else if (dlg.right > mon.right)
 		dlg.OffsetRect(mon.right - dlg.right, 0);
-	if(dlg.top < 0)
+	if (dlg.top < 0)
 		dlg.OffsetRect(0, -dlg.top);
 	else if (dlg.bottom > mon.bottom)
 		dlg.OffsetRect(0, mon.bottom - dlg.bottom);
 
 	MoveWindow(&dlg);
 	m_URL.SetCueBanner(L"(can be dragged from the browser adddress bar)", TRUE);
+	m_progress.SetRange(0, 100);
+	EnableControls(true);
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
@@ -360,8 +445,19 @@ void CYouTooDlg::OnBnClickedGo()
 
 void CYouTooDlg::DownloadInThread(CString id, CString fileName) // executed in thread
 {
-	bool res = DownloadAudio(id, fileName, m_stopEvent);
+	bool res = DownloadAudio(id, fileName, m_stopEvent, [this](const char* txt) { OnPipeRead(txt); });
 	PostMessage(WM_THREAD_FINISHED, 0, res);
+}
+
+void CYouTooDlg::OnPipeRead(const char* txt)
+{
+	CStringA str = txt;
+	str.Trim();
+	if (strncmp(str, "[download]", 10) == 0) {
+		m_progress.SetPos(atoi(str.GetString() + 10));
+	}
+	else
+		AddLog(fromUtf8(str.GetString()));
 }
 
 LRESULT CYouTooDlg::OnEndThread(WPARAM wParam, LPARAM lParam)
@@ -381,18 +477,23 @@ void CYouTooDlg::AddLog(const CString& text, bool discardPrevious)
 {
 	int len = m_status.GetWindowTextLength();
 	m_status.SetSel(len, len, TRUE);
-	if(!len || discardPrevious)
-		m_status.SetWindowText(text);
+	if (discardPrevious)
+		m_status.SetWindowText(text + L"\r\n");
 	else
-		m_status.ReplaceSel(L"\r\n" + text);
+		m_status.ReplaceSel(text + L"\r\n");
 }
 
 void CYouTooDlg::EnableControls(bool en)
 {
 	m_dropTarget.Enable(en);
 	m_URL.EnableWindow(en);
-	if (auto btn = GetDlgItem(IDC_BUTTON1))
+	if (auto btn = GetDlgItem(IDC_BUTTON1)) // "go"
 		btn->EnableWindow(en);
+	if (auto btn = GetDlgItem(IDC_BUTTON2)) // "stop"
+		btn->ShowWindow(en ? SW_HIDE : SW_SHOW);
+	m_progress.ShowWindow(en ? SW_HIDE : SW_SHOW);
+	m_progress.SetPos(0);
+
 }
 
 void CYouTooDlg::OnOK()
@@ -403,10 +504,17 @@ void CYouTooDlg::OnOK()
 
 void CYouTooDlg::OnCancel()
 {
-	if(!m_thread)
+	if (!m_thread)
 		CDialogEx::OnCancel();
 	else {
 		m_closeOnFinish = true;
 		SetEvent(m_stopEvent);
 	}
+}
+
+
+void CYouTooDlg::OnBnClickedButton2()
+{
+	// stop
+	SetEvent(m_stopEvent);
 }

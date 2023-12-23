@@ -35,6 +35,7 @@ protected:
 	afx_msg LRESULT OnEndThread(WPARAM wParam, LPARAM lParam);
 	void AddLog(const CString& text, bool discardPrevious = false);
 	void DownloadInThread(CString id, CString fileName); // executed in thread
+	void OnPipeRead(const char* txt);
 	void EnableControls(bool en);
 
 	DECLARE_MESSAGE_MAP()
@@ -48,4 +49,7 @@ protected:
 	HANDLE m_stopEvent = nullptr;
 	std::optional<std::jthread> m_thread;
 	bool m_closeOnFinish = false;
+public:
+	CProgressCtrl m_progress;
+	afx_msg void OnBnClickedButton2();
 };
