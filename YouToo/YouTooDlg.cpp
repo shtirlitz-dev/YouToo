@@ -289,6 +289,25 @@ namespace {
 
 		return TouchFile(file);
 	}
+
+	CString GetClipboardText(HWND hWnd)
+	{
+		CString text;
+
+		if (::OpenClipboard(hWnd)) {
+			HANDLE hClipboardData = ::GetClipboardData(CF_UNICODETEXT);
+			if (hClipboardData != NULL) {
+				LPWSTR lpClipboardText = static_cast<LPWSTR>(::GlobalLock(hClipboardData));
+				if (lpClipboardText != NULL) {
+					text = lpClipboardText;
+					::GlobalUnlock(hClipboardData);
+				}
+			}
+			::CloseClipboard();
+		}
+
+		return text;
+	}
 }
 
 // CYouTooDlg dialog
@@ -347,6 +366,11 @@ BOOL CYouTooDlg::OnInitDialog()
 	m_URL.SetCueBanner(L"(can be dragged from the browser adddress bar)", TRUE);
 	m_progress.SetRange(0, 100);
 	EnableControls(true);
+
+	CString clbText = GetClipboardText(m_hWnd);
+	CString id = ExtractVideoId(clbText);
+	if (!id.IsEmpty())
+		m_URL.SetWindowText(clbText);
 
 	return TRUE;  // return TRUE  unless you set the focus to a control
 }
