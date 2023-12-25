@@ -165,6 +165,7 @@ namespace {
 		title.Replace('>', '_');
 		title.Replace('/', '_');
 		title.Replace('\\', '_');
+		title.Replace('\"', '\'');
 		return title;
 	}
 
