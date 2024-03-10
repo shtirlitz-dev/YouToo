@@ -13,6 +13,7 @@
 
 #include <memory>
 #include <functional>
+#include <fstream>
 #include <vector>
 #include <string>
 #include <string_view>
@@ -38,7 +39,7 @@ https://github.com/yt-dlp/yt-dlp
 // https://www.youtube.com/watch?v=23yNGer9Wqs
 // https://youtu.be/q6EHd8T8Xgo
 
-
+// very hi resolution https://www.youtube.com/watch?v=tUQmu7q0G-g
 */
 
 namespace {
@@ -138,6 +139,7 @@ namespace {
 		CString title;
 		if (content.empty())
 			return title;
+		//std::ofstream(L"page.txt", std::ios::binary).write(content.data(), content.size());
 		std::string_view cc{ content.data(), content.size() };
 		if (auto p1 = cc.find("<title>"); p1 != std::string_view::npos) {
 			p1 += 7;
@@ -148,7 +150,7 @@ namespace {
 				title = fromUtf8(tit);
 			}
 		}
-
+		// after </title>: <meta name="title" content="Bach - ....
 		if (title.IsEmpty())
 			err->SetString(L"Failed to find the title");
 
@@ -194,6 +196,7 @@ namespace {
 		return {};
 	}
 
+	/*
 	bool TouchFile(const CString& file)
 	{
 		SYSTEMTIME systemTime;
@@ -211,6 +214,7 @@ namespace {
 		CloseHandle(hFile);
 		return res;
 	}
+	*/
 
 	//void ReadOutput(HANDLE hOutputRead, HWND hEditControl) {
 	void ReadOutput(HANDLE hOutputRead, std::function<void(const char*)> logFun) {
@@ -227,7 +231,7 @@ namespace {
 		}
 	}
 
-	bool DownloadAudio(const CString& vidId, const CString& file, HANDLE hStop, std::function<void(const char*)> logFun)
+	bool DownloadAudio(const CString& vidId, const CString& file, int format, HANDLE hStop, std::function<void(const char*)> logFun)
 	{
 		STARTUPINFO startupInfo{
 			.cb = sizeof(STARTUPINFO),
@@ -257,7 +261,36 @@ namespace {
 			};
 
 		//yt-dlp -x --audio-format mp3 -o fino_al_giorno_nuovo.mp3 -- KkpmgBuc8XQ
-		CString cmdLine = L"yt-dlp -x --audio-format mp3 -o \"" + file + "\" -- " + vidId;
+		// -x, --extract-audio    Convert video files to audio-only files (requires ffmpeg and ffprobe)
+		// --audio-format FORMAT  Format to convert the audio to when -x is
+		//                        used. (currently supported : best(default),
+		//                        aac, alac, flac, m4a, mp3, opus, vorbis,
+		//                        wav).You can specify multiple rules using
+		//                        similar syntax as --remux - video
+
+		/* video:
+# Download and merge the best video-only format and the best audio-only format,
+# or download the best combined format if video-only format is not available
+$ yt-dlp -f "bv+ba/b"
+
+		* 
+yt-dlp -f "bv+ba/b" -o ich_ruf_zu -- FZUFZjuxmfU                          -> .webm
+yt-dlp -f "bv+ba/b" -o ich_ruf_zu.mp4 -- FZUFZjuxmfU                      -> .mp4.webm
+yt-dlp -f "bv+ba/b" --remux-video mp4 -o ich_ruf_zu4 -- FZUFZjuxmfU       -> .mp4, codec webm - iMovie doesn't accept
+yt-dlp -f "bv+ba/b" --recode-video mp4 -o ich_ruf_zu5 -- FZUFZjuxmfU      -> .mp4, codec H264 - OK for iMovie
+
+		separately ffmpeg convert:
+		ffmpeg -i ich_ruf_zu1.webm -f mp4 ich_converted   -> makes mp4 file but without extension, extension must be added
+		*/
+
+
+		CString cmdLine = L"yt-dlp ";
+		cmdLine += 
+			format == 0? L"-x --audio-format mp3":
+			format == 1 ? L"-f \"bv+ba/b\"":
+			L"-f \"bv+ba/b\" --recode-video mp4";
+
+		cmdLine += L" --no-mtime -o \"" + file + L"\" -- " + vidId;
 		if (!CreateProcess(
 			nullptr,             // No module name (use command line)
 			cmdLine.GetBuffer(), // Command line
@@ -287,8 +320,9 @@ namespace {
 		CloseHandle(processInfo.hThread);
 		closePipe();
 		thReadPipe.join();
-
-		return TouchFile(file);
+		// "C:\Users\lukya\Downloads\Eugne Gigout Toccata en Si mineur - Olivier Penin, orgue Sainte Clotilde Paris VII.webm"
+		//return TouchFile(file); // TODO remove Touch (due to --no-mtime)
+		return true;
 	}
 
 	CString GetClipboardText(HWND hWnd)
@@ -366,6 +400,7 @@ BOOL CYouTooDlg::OnInitDialog()
 	MoveWindow(&dlg);
 	m_URL.SetCueBanner(L"(can be dragged from the browser adddress bar)", TRUE);
 	m_progress.SetRange(0, 100);
+	CheckRadioButton(IDC_RADIO1, IDC_RADIO3, IDC_RADIO1);
 	EnableControls(true);
 
 	CString clbText = GetClipboardText(m_hWnd);
@@ -454,10 +489,24 @@ void CYouTooDlg::OnBnClickedGo()
 	}
 	AddLog(L"Title: " + title);
 
-	CString fileName = MakeFileName(title) + L".mp3";
-	CFileDialog fd(FALSE, L"mp3", fileName,
-		OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,
-		L"mp3 files|*.mp3|All files|*.*||", this);
+	int format = GetCheckedRadioButton(IDC_RADIO1, IDC_RADIO3) - IDC_RADIO1;
+
+	CString fileName = MakeFileName(title);
+	LPCTSTR filter =
+		format == 0? L"mp3 files|*.mp3|All files|*.*||":
+		format == 1? L"Video files|*.mp4;*.webm;*.mkv;*.avi;*mov;*.flv|All files|*.*||":
+		L"mp4 files|*.mp4|All files|*.*||";
+	LPCTSTR defExt =
+		format == 0? L"mp3":
+		format == 1? nullptr:
+		L"mp4";
+	if (defExt)
+		(fileName += L".") += defExt;
+
+	CFileDialog fd(FALSE, defExt, fileName,
+		OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,// | OFN_EXTENSIONDIFFERENT,
+		filter, this);
+
 	if (fd.DoModal() != IDOK)
 		return;
 
@@ -465,12 +514,12 @@ void CYouTooDlg::OnBnClickedGo()
 	AddLog(L"Loading " + fileName + L"...");
 	EnableControls(false);
 	m_stopEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
-	m_thread = std::jthread(&CYouTooDlg::DownloadInThread, this, id, fileName);
+	m_thread = std::jthread(&CYouTooDlg::DownloadInThread, this, id, fileName, format);
 }
 
-void CYouTooDlg::DownloadInThread(CString id, CString fileName) // executed in thread
+void CYouTooDlg::DownloadInThread(CString id, CString fileName, int format) // executed in thread
 {
-	bool res = DownloadAudio(id, fileName, m_stopEvent, [this](const char* txt) { OnPipeRead(txt); });
+	bool res = DownloadAudio(id, fileName, format, m_stopEvent, [this](const char* txt) { OnPipeRead(txt); });
 	PostMessage(WM_THREAD_FINISHED, 0, res);
 }
 
@@ -512,8 +561,10 @@ void CYouTooDlg::EnableControls(bool en)
 {
 	m_dropTarget.Enable(en);
 	m_URL.EnableWindow(en);
-	if (auto btn = GetDlgItem(IDC_BUTTON1)) // "go"
-		btn->EnableWindow(en);
+	for (auto id : { IDC_RADIO1 , IDC_RADIO2, IDC_RADIO3, IDC_BUTTON1 }) { // "audio", "video",  "go"
+		if (auto btn = GetDlgItem(id))
+			btn->EnableWindow(en);
+	}
 	if (auto btn = GetDlgItem(IDC_BUTTON2)) // "stop"
 		btn->ShowWindow(en ? SW_HIDE : SW_SHOW);
 	m_progress.ShowWindow(en ? SW_HIDE : SW_SHOW);

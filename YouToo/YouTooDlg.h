@@ -34,7 +34,7 @@ protected:
 	afx_msg void OnBnClickedGo();
 	afx_msg LRESULT OnEndThread(WPARAM wParam, LPARAM lParam);
 	void AddLog(const CString& text, bool discardPrevious = false);
-	void DownloadInThread(CString id, CString fileName); // executed in thread
+	void DownloadInThread(CString id, CString fileName, int format); // executed in thread
 	void OnPipeRead(const char* txt);
 	void EnableControls(bool en);
 
