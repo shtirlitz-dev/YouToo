@@ -387,7 +387,7 @@ BOOL CYouTooDlg::OnInitDialog()
 	CRect mon = GetMonitorRect(m_hWnd);
 	CRect dlg;
 	GetWindowRect(&dlg);
-	dlg.InflateRect(dlg.Width() * 7 / 16, dlg.Height() * 1 / 4);
+	dlg.InflateRect(dlg.Width() * 2 / 16, dlg.Height() * 1 / 4);
 	if (dlg.left < 0)
 		dlg.OffsetRect(-dlg.left, 0);
 	else if (dlg.right > mon.right)
@@ -468,7 +468,6 @@ LRESULT CYouTooDlg::OnDroppedText(WPARAM wParam, LPARAM lParam) {
 
 void CYouTooDlg::OnBnClickedGo()
 {
-	// TODO: Add your control notification handler code here
 	CString url;
 	m_URL.GetWindowText(url);
 	AddLog(L"", true);
@@ -503,14 +502,32 @@ void CYouTooDlg::OnBnClickedGo()
 	if (defExt)
 		(fileName += L".") += defExt;
 
-	CFileDialog fd(FALSE, defExt, fileName,
-		OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,// | OFN_EXTENSIONDIFFERENT,
-		filter, this);
+	bool folderDefined = false;
+	if(IsDlgButtonChecked(IDC_CHECK1) == BST_CHECKED) // automatically to "downloads"
+	{
+		CString downloadFolder;
+		// Variable to hold the path
+		LPWSTR path = nullptr;
+		if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, NULL, &path))) {
+			downloadFolder = path;
+			CoTaskMemFree(path); // Free the memory allocated for the path
+			folderDefined = true;
+			//downloadFolder = L"C:\\Users\\lukya\\Downloads"
+			fileName = downloadFolder + "\\" + fileName;
+		}
+	}
 
-	if (fd.DoModal() != IDOK)
-		return;
+	if (!folderDefined) {
+		CFileDialog fd(FALSE, defExt, fileName,
+			OFN_HIDEREADONLY | OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST,// | OFN_EXTENSIONDIFFERENT,
+			filter, this);
 
-	fileName = fd.GetPathName();
+		if (fd.DoModal() != IDOK)
+			return;
+
+		fileName = fd.GetPathName();
+	}
+
 	AddLog(L"Loading " + fileName + L"...");
 	EnableControls(false);
 	m_stopEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
@@ -561,7 +578,7 @@ void CYouTooDlg::EnableControls(bool en)
 {
 	m_dropTarget.Enable(en);
 	m_URL.EnableWindow(en);
-	for (auto id : { IDC_RADIO1 , IDC_RADIO2, IDC_RADIO3, IDC_BUTTON1 }) { // "audio", "video",  "go"
+	for (auto id : { IDC_CHECK1, IDC_RADIO1, IDC_RADIO2, IDC_RADIO3, IDC_BUTTON1 }) { // "to 'download'", "audio", "video", "mp4", "go"
 		if (auto btn = GetDlgItem(id))
 			btn->EnableWindow(en);
 	}
