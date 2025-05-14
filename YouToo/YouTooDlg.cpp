@@ -196,6 +196,25 @@ namespace {
 		return {};
 	}
 
+	CString ExtractPlaylistId(const  CString& url)
+	{
+		// https://www.youtube.com/playlist?list=PL7_YDugrIEicQR4EEbOWIfk2uSmTWkDo8
+		// https://www.youtube.com/playlist?list=PLyDjQQDu9hgoTW2iI7n_aY7SHIZ8ZJdZl
+		// yt-dlp PL7_YDugrIEicQR4EEbOWIfk2uSmTWkDo8  -x --audio-format mp3
+		// find 34 chars in {0-9, A-Z, a-z, -, _}
+		for (int i = 0; i < url.GetLength(); ) {
+			bool maybeId = isIdChar(url[i]);
+			int start = i++;
+			while (i < url.GetLength() && maybeId == isIdChar(url[i]))
+				++i;
+
+			auto deb = url.Mid(start, i - start);
+			if (maybeId && i - start == 34)
+				return url.Mid(start, i - start);
+		}
+		return {};
+	}
+
 	/*
 	bool TouchFile(const CString& file)
 	{
@@ -231,6 +250,8 @@ namespace {
 		}
 	}
 
+	constexpr int FormatPlaylistMp3 = 100;
+
 	bool DownloadAudio(const CString& vidId, const CString& file, int format, HANDLE hStop, std::function<void(const char*)> logFun)
 	{
 		STARTUPINFO startupInfo{
@@ -260,6 +281,11 @@ namespace {
 				CloseHandle(hChildOutputRead);
 			};
 
+		// for playlists:
+		// D:\tmp\01>yt-dlp PL7_YDugrIEicQR4EEbOWIfk2uSmTWkDo8  -x --audio-format mp3
+		// ...
+		// [download] Finished downloading playlist: Canzoni Napoletane 2024 - Migliore Musica Napoletana 2024-2025 (Canzoni del Momento 2024 Napoletane)
+
 		//yt-dlp -x --audio-format mp3 -o fino_al_giorno_nuovo.mp3 -- KkpmgBuc8XQ
 		// -x, --extract-audio    Convert video files to audio-only files (requires ffmpeg and ffprobe)
 		// --audio-format FORMAT  Format to convert the audio to when -x is
@@ -282,15 +308,31 @@ yt-dlp -f "bv+ba/b" --recode-video mp4 -o ich_ruf_zu5 -- FZUFZjuxmfU      -> .mp
 		separately ffmpeg convert:
 		ffmpeg -i ich_ruf_zu1.webm -f mp4 ich_converted   -> makes mp4 file but without extension, extension must be added
 		*/
+		LPCWSTR lpCurrentDirectory = nullptr; // Use parent's starting directory
+		CString downloadFolder;
+		bool isPlaylist = format == FormatPlaylistMp3;
+		if (isPlaylist) {
+			LPWSTR path = nullptr;
+			if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Downloads, 0, NULL, &path))) {
+				downloadFolder = path;
+				lpCurrentDirectory = downloadFolder;
+				CoTaskMemFree(path); // Free the memory allocated for the path
+			}
+		}
+
 
 
 		CString cmdLine = L"yt-dlp ";
 		cmdLine += 
-			format == 0? L"-x --audio-format mp3":
+			format == 0 || isPlaylist ? L"-x --audio-format mp3":
 			format == 1 ? L"-f \"bv+ba/b\"":
 			L"-f \"bv+ba/b\" --recode-video mp4";
 
-		cmdLine += L" --no-mtime -o \"" + file + L"\" -- " + vidId;
+		if(isPlaylist)
+			cmdLine += L" --no-mtime " + vidId;
+		else
+			cmdLine += L" --no-mtime -o \"" + file + L"\" -- " + vidId;
+
 		if (!CreateProcess(
 			nullptr,             // No module name (use command line)
 			cmdLine.GetBuffer(), // Command line
@@ -299,7 +341,7 @@ yt-dlp -f "bv+ba/b" --recode-video mp4 -o ich_ruf_zu5 -- FZUFZjuxmfU      -> .mp
 			TRUE,                // Set handle inheritance to FALSE
 			0,                   // No creation flags
 			nullptr,             // Use parent's environment block
-			nullptr,             // Use parent's starting directory
+			lpCurrentDirectory,
 			&startupInfo,        // Pointer to STARTUPINFO structure
 			&processInfo)) {      // Pointer to PROCESS_INFORMATION structure
 			closePipe();
@@ -405,6 +447,8 @@ BOOL CYouTooDlg::OnInitDialog()
 
 	CString clbText = GetClipboardText(m_hWnd);
 	CString id = ExtractVideoId(clbText);
+	if (id.IsEmpty())
+		id = ExtractPlaylistId(clbText);
 	if (!id.IsEmpty())
 		m_URL.SetWindowText(clbText);
 
@@ -473,8 +517,21 @@ void CYouTooDlg::OnBnClickedGo()
 	AddLog(L"", true);
 	CString id = ExtractVideoId(url);
 	if (id.IsEmpty()) {
-		AddLog(L"Video ID not found in URL");
+		// can be https://www.youtube.com/playlist?list=PL7_YDugrIEicQR4EEbOWIfk2uSmTWkDo8
+		id = ExtractPlaylistId(url);
+		if (id.IsEmpty()) {
+			AddLog(L"Video ID not found in URL");
+			return;
+		}
+
+		AddLog(L"Loading playlist " + id + L"...");
+		EnableControls(false);
+		m_stopEvent = CreateEvent(nullptr, FALSE, FALSE, nullptr);
+		CString fileName;
+		int format = FormatPlaylistMp3;
+		m_thread = std::jthread(&CYouTooDlg::DownloadInThread, this, id, fileName, format);
 		return;
+
 	}
 	CString normUrl = L"https://www.youtube.com/watch?v=" + id;
 	AddLog(L"Check URL " + normUrl);
